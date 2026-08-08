@@ -64,6 +64,24 @@ func main() {
 							"required": []string{"file_path"},
 						},
 					}),
+					openai.ChatCompletionFunctionTool(openai.FunctionDefinitionParam{
+						Name:        "Write",
+						Description: openai.String("Write content to a file"),
+						Parameters: openai.FunctionParameters{
+							"type": "object",
+							"properties": map[string]any{
+								"file_path": map[string]string{
+									"type":        "string",
+									"description": "The path to the file to write",
+								},
+								"content": map[string]string{
+									"type":        "string",
+									"description": "The content to write to the file",
+								},
+							},
+							"required": []string{"file_path", "content"},
+						},
+					}),
 				},
 			},
 		)
@@ -96,20 +114,56 @@ func main() {
 
 				for _, tool := range message.ToolCalls {
 					if tool.Function.Name == "Read" {
-						var toolArgs map[string]any
-						_ = json.Unmarshal([]byte(tool.Function.Arguments), &toolArgs)
-						if filepath, ok := toolArgs["file_path"].(string); ok {
-							content, _ := os.ReadFile(filepath)
-							messages = append(messages, openai.ChatCompletionMessageParamUnion{
-								OfTool: &openai.ChatCompletionToolMessageParam{
-									Content: openai.ChatCompletionToolMessageParamContentUnion{
-										OfString: openai.String(string(content)),
-									},
-									ToolCallID: tool.ID,
-									Role:       "tool",
-								},
-							})
+						var toolArgs struct {
+							FilePath string `json:"file_path"`
 						}
+
+						parseErr := json.Unmarshal([]byte(tool.Function.Arguments), &toolArgs)
+						if parseErr != nil {
+							panic(parseErr)
+						}
+
+						content, readErr := os.ReadFile(toolArgs.FilePath)
+						if readErr != nil {
+							panic(readErr)
+						}
+
+						messages = append(messages, openai.ChatCompletionMessageParamUnion{
+							OfTool: &openai.ChatCompletionToolMessageParam{
+								Content: openai.ChatCompletionToolMessageParamContentUnion{
+									OfString: openai.String(string(content)),
+								},
+								ToolCallID: tool.ID,
+								Role:       "tool",
+							},
+						})
+					}
+
+					if tool.Function.Name == "Write" {
+						var toolArgs struct {
+							FilePath string `json:"file_path"`
+							Content  string `json:"content"`
+						}
+
+						parseErr := json.Unmarshal([]byte(tool.Function.Arguments), &toolArgs)
+						if parseErr != nil {
+							panic(parseErr)
+						}
+
+						writeErr := os.WriteFile(toolArgs.FilePath, []byte(toolArgs.Content), 0644)
+						if writeErr != nil {
+							panic(writeErr)
+						}
+
+						messages = append(messages, openai.ChatCompletionMessageParamUnion{
+							OfTool: &openai.ChatCompletionToolMessageParam{
+								Content: openai.ChatCompletionToolMessageParamContentUnion{
+									OfString: openai.String("Created the file"),
+								},
+								ToolCallID: tool.ID,
+								Role:       "tool",
+							},
+						})
 					}
 				}
 			case "stop":
