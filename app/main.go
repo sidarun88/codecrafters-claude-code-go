@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -80,6 +81,20 @@ func main() {
 								},
 							},
 							"required": []string{"file_path", "content"},
+						},
+					}),
+					openai.ChatCompletionFunctionTool(openai.FunctionDefinitionParam{
+						Name:        "Bash",
+						Description: openai.String("Execute a shell command"),
+						Parameters: openai.FunctionParameters{
+							"type": "object",
+							"properties": map[string]any{
+								"command": map[string]string{
+									"type":        "string",
+									"description": "The command to execute",
+								},
+							},
+							"required": []string{"command"},
 						},
 					}),
 				},
@@ -164,6 +179,41 @@ func main() {
 								Role:       "tool",
 							},
 						})
+					}
+
+					if tool.Function.Name == "Bash" {
+						var toolArgs struct {
+							Command string `json:"command"`
+						}
+
+						parseErr := json.Unmarshal([]byte(tool.Function.Arguments), &toolArgs)
+						if parseErr != nil {
+							panic(parseErr)
+						}
+
+						cmd := exec.Command("bash", "-c", toolArgs.Command)
+						execOut, execErr := cmd.CombinedOutput()
+						if execErr != nil {
+							messages = append(messages, openai.ChatCompletionMessageParamUnion{
+								OfTool: &openai.ChatCompletionToolMessageParam{
+									Content: openai.ChatCompletionToolMessageParamContentUnion{
+										OfString: openai.String(execErr.Error()),
+									},
+									ToolCallID: tool.ID,
+									Role:       "tool",
+								},
+							})
+						} else {
+							messages = append(messages, openai.ChatCompletionMessageParamUnion{
+								OfTool: &openai.ChatCompletionToolMessageParam{
+									Content: openai.ChatCompletionToolMessageParamContentUnion{
+										OfString: openai.String(string(execOut)),
+									},
+									ToolCallID: tool.ID,
+									Role:       "tool",
+								},
+							})
+						}
 					}
 				}
 			case "stop":
