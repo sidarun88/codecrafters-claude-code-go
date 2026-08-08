@@ -30,63 +30,94 @@ func main() {
 		panic("Env variable OPENROUTER_API_KEY not found")
 	}
 
-	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
-	resp, err := client.Chat.Completions.New(context.Background(),
-		openai.ChatCompletionNewParams{
-			Model: "anthropic/claude-haiku-4.5",
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				{
-					OfUser: &openai.ChatCompletionUserMessageParam{
-						Content: openai.ChatCompletionUserMessageParamContentUnion{
-							OfString: openai.String(prompt),
-						},
-					},
-				},
-			},
-			Tools: []openai.ChatCompletionToolUnionParam{
-				openai.ChatCompletionFunctionTool(openai.FunctionDefinitionParam{
-					Name:        "Read",
-					Description: openai.String("Read and return the contents of a file"),
-					Parameters: openai.FunctionParameters{
-						"type": "object",
-						"properties": map[string]any{
-							"filepath": map[string]string{
-								"type":        "string",
-								"description": "The path to the file to read",
-							},
-						},
-						"required": []string{"file_path"},
-					},
-				}),
-			},
-		},
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if len(resp.Choices) == 0 {
-		panic("No choices in response")
-	}
-
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
 
-	for _, choice := range resp.Choices {
-		message := choice.Message
+	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
+	messages := []openai.ChatCompletionMessageParamUnion{
+		{
+			OfUser: &openai.ChatCompletionUserMessageParam{
+				Content: openai.ChatCompletionUserMessageParamContentUnion{
+					OfString: openai.String(prompt),
+				},
+			},
+		},
+	}
 
-		// Chek if tool call
-		for _, tool := range message.ToolCalls {
-			if tool.Function.Name == "Read" {
-				var toolArgs map[string]any
-				_ = json.Unmarshal([]byte(tool.Function.Arguments), &toolArgs)
-				if filepath, ok := toolArgs["filepath"].(string); ok {
-					content, _ := os.ReadFile(filepath)
-					fmt.Println(string(content))
-				}
-			}
+	for {
+		resp, err := client.Chat.Completions.New(context.Background(),
+			openai.ChatCompletionNewParams{
+				Model:    "anthropic/claude-haiku-4.5",
+				Messages: messages,
+				Tools: []openai.ChatCompletionToolUnionParam{
+					openai.ChatCompletionFunctionTool(openai.FunctionDefinitionParam{
+						Name:        "Read",
+						Description: openai.String("Read and return the contents of a file"),
+						Parameters: openai.FunctionParameters{
+							"type": "object",
+							"properties": map[string]any{
+								"file_path": map[string]string{
+									"type":        "string",
+									"description": "The path to the file to read",
+								},
+							},
+							"required": []string{"file_path"},
+						},
+					}),
+				},
+			},
+		)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(resp.Choices) == 0 {
+			panic("No choices in response")
 		}
 
-		fmt.Print(message.Content)
+		for _, choice := range resp.Choices {
+			message := choice.Message
+
+			switch choice.FinishReason {
+			case "tool_calls":
+				toolCallsParam := make([]openai.ChatCompletionMessageToolCallUnionParam, len(message.ToolCalls))
+				for i, tool := range message.ToolCalls {
+					toolCallsParam[i] = tool.ToParam()
+				}
+				messages = append(
+					messages,
+					openai.ChatCompletionMessageParamUnion{
+						OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+							ToolCalls: toolCallsParam,
+							Role:      "assistant",
+						},
+					},
+				)
+
+				for _, tool := range message.ToolCalls {
+					if tool.Function.Name == "Read" {
+						var toolArgs map[string]any
+						_ = json.Unmarshal([]byte(tool.Function.Arguments), &toolArgs)
+						if filepath, ok := toolArgs["file_path"].(string); ok {
+							content, _ := os.ReadFile(filepath)
+							messages = append(messages, openai.ChatCompletionMessageParamUnion{
+								OfTool: &openai.ChatCompletionToolMessageParam{
+									Content: openai.ChatCompletionToolMessageParamContentUnion{
+										OfString: openai.String(string(content)),
+									},
+									ToolCallID: tool.ID,
+									Role:       "tool",
+								},
+							})
+						}
+					}
+				}
+			case "stop":
+				fmt.Print(message.Content)
+				os.Exit(0)
+			default:
+				fmt.Print(message.Content)
+			}
+		}
 	}
 }
