@@ -34,16 +34,31 @@ func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
 
+	skillsMessage, msgErr := skillInstructions()
+	if msgErr != nil {
+		fmt.Fprintln(os.Stderr, msgErr)
+		os.Exit(1)
+	}
+
 	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
-	messages := []openai.ChatCompletionMessageParamUnion{
-		{
-			OfUser: &openai.ChatCompletionUserMessageParam{
-				Content: openai.ChatCompletionUserMessageParamContentUnion{
-					OfString: openai.String(prompt),
+	var messages []openai.ChatCompletionMessageParamUnion
+	if skillsMessage != "" {
+		messages = append(messages, openai.ChatCompletionMessageParamUnion{
+			OfSystem: &openai.ChatCompletionSystemMessageParam{
+				Content: openai.ChatCompletionSystemMessageParamContentUnion{
+					OfString: openai.String(skillsMessage),
 				},
 			},
-		},
+		})
 	}
+
+	messages = append(messages, openai.ChatCompletionMessageParamUnion{
+		OfUser: &openai.ChatCompletionUserMessageParam{
+			Content: openai.ChatCompletionUserMessageParamContentUnion{
+				OfString: openai.String(prompt),
+			},
+		},
+	})
 
 	for {
 		resp, err := client.Chat.Completions.New(context.Background(),
